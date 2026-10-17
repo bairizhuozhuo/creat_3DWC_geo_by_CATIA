@@ -1,0 +1,330 @@
+Language="VBSCRIPT"
+
+Sub BuildYarnLoft(gs_construction_geometry, xyz, angles, yarn_section_dir, point_num, yarn_name, yarn_idx, yarnSurfaceHB, file_name_end)
+
+    Dim app : Set app = CATIA
+    Dim partDoc : Set partDoc = app.ActiveDocument
+    Dim part : Set part = partDoc.Part
+    Dim hsf : Set hsf = part.HybridShapeFactory
+    Dim sf : Set sf = part.ShapeFactory
+    Dim sel : Set sel = partDoc.Selection
+    Const Pi = 3.14159265358979
+    Dim angleRad, c, s
+    Dim loftName
+    Dim nodeCount : nodeCount = UBound(xyz, 1) + 1
+    Dim section_uv_all()
+    ReDim section_uv_all(nodeCount)
+
+    CATIA.RefreshDisplay = False
+
+    Dim gsYarn : Set gsYarn = gs_construction_geometry.HybridBodies.Add()
+    gsYarn.Name = yarn_name & "_" & yarn_idx
+
+    Dim yarnPath : Set yarnPath = gsYarn.HybridBodies.Add()
+    yarnPath.Name = "yarn_path"
+
+    Dim pathNodes : Set pathNodes = yarnPath.HybridBodies.Add()
+    pathNodes.Name = "path_nodes"
+
+    Dim splPath : Set splPath = hsf.AddNewSpline()
+    splPath.SetSplineType 0
+    splPath.SetClosing 0
+
+    Dim i, x, y, z, p, refP
+    For i = LBound(xyz, 1) To UBound(xyz, 1)
+        x = CDbl(xyz(i, 0))
+        y = CDbl(xyz(i, 1))
+        z = CDbl(xyz(i, 2))
+        Set p = hsf.AddNewPointCoord(x, y, z)
+        pathNodes.AppendHybridShape p
+        Set refP = part.CreateReferenceFromObject(p)
+        splPath.AddPoint refP
+        yarn_section_path = yarn_section_dir & "\" & yarn_name & "-" & yarn_idx & "_section-" & (i+1) & "_points" & file_name_end & ".csv"
+        uv = ReadSectionCSV(yarn_section_path, point_num)
+        If IsEmpty(uv) Then
+            MsgBox yarn_section_path & "No section points were read or the file does not exist."
+            Exit Sub
+        End If
+
+        If (UBound(uv,1) - LBound(uv,1) + 1) <> point_num Then
+            MsgBox "Section point count mismatch at i=" & i
+            Exit Sub
+        End If
+
+        section_uv_all(i) = uv
+
+    Next
+
+    yarnPath.AppendHybridShape splPath
+    Dim refPath : Set refPath = part.CreateReferenceFromObject(splPath)
+
+    Dim section_point_idx0
+    section_point_idx0 = 0
+
+    Dim section_point_idx1
+    section_point_idx1 = (point_num+8.0)/8.0-1
+
+    Dim section_point_idx2
+    section_point_idx2 = 2*section_point_idx1
+
+    Dim section_point_idx3
+    section_point_idx3 = 3*section_point_idx1
+
+    Dim section_point_idx4
+    section_point_idx4 = 4*section_point_idx1
+
+    Dim section_point_idx5
+    section_point_idx5 = 5*section_point_idx1
+
+    Dim section_point_idx6
+    section_point_idx6 = 6*section_point_idx1
+
+    Dim section_point_idx7
+    section_point_idx7 = 7*section_point_idx1
+
+    Dim refPt2D As Reference
+    Dim pt3D As HybridShapePointExplicit
+
+    Dim loft : Set loft = hsf.AddNewLoft()
+    loft.SectionCoupling = 4
+    loft.Relimitation = 1
+    loft.CanonicalDetection = 2
+    yarnSurfaceHB.AppendHybridShape loft
+    loftName = yarn_name & "_" & yarn_idx & "_surface"
+    loft.Name = loftName
+
+    part.InWorkObject = gsYarn
+    Dim sketches As Sketches
+    Set sketches = gsYarn.HybridSketches
+
+    Dim node, refNode, planeNormal, refPlane
+    Dim u0, v0, ur, vr
+    Dim axisData(8)
+    Dim componentsPlane(8)
+    Dim dirPlaneNor(2)
+    Dim dir1Plane(2)
+    Dim dir2Plane(2)
+
+    Dim directionLine (2)
+    Dim dirSketcheH(2)
+    Dim dirSketcheV(2)
+    Dim V_coord_fix
+
+    Dim Xi, Yi, Zi
+    Dim f2d As Factory2D
+    Dim sp2d As Spline2D
+    Dim pt2d As Point2D
+    Dim pt2d_ctrl As ControlPoint2D
+    Dim sketch As Sketch
+    Dim poles()
+    ReDim poles(point_num - 1 )
+    Dim dirX As Variant, dirY As Variant, dirZ As Variant
+
+    Dim TheSPAWorkbench As Workbench
+    Set TheSPAWorkbench = CATIA.ActiveDocument.GetWorkbench("SPAWorkbench")
+    Dim TheMeasurable As Measurable
+
+    If yarn_name = "weft" Then
+        dirSketcheH(0) = 1.0
+        dirSketcheH(1) = 0.0
+        dirSketcheH(2) = 0.0
+        V_coord_fix = -1.0
+    Else
+        dirSketcheH(0) = 0.0
+        dirSketcheH(1) = 1.0
+        dirSketcheH(2) = 0.0
+        V_coord_fix = 1.0
+    End If
+
+    For i = 1 To nodeCount
+
+        Set node = pathNodes.HybridShapes.Item(i)
+        Set refNode = part.CreateReferenceFromObject(node)
+
+        Set planeNormal = hsf.AddNewPlaneNormal(refPath, refNode)
+        part.UpdateObject planeNormal
+        Set refPlane = part.CreateReferenceFromObject(planeNormal)
+
+        Set TheMeasurable = TheSPAWorkbench.GetMeasurable(refPlane)
+        TheMeasurable.GetPlane componentsPlane
+        dir1Plane(0) = componentsPlane(3)
+        dir1Plane(1) = componentsPlane(4)
+        dir1Plane(2) = componentsPlane(5)
+        dir2Plane(0) = componentsPlane(6)
+        dir2Plane(1) = componentsPlane(7)
+        dir2Plane(2) = componentsPlane(8)
+
+        call UserCrossProduct(dir1Plane, dir2Plane, dirPlaneNor)
+        call UserCrossProduct(dirPlaneNor, dirSketcheH, dirSketcheV)
+
+        Xi = CDbl(xyz(i - 1, 0))
+        Yi = CDbl(xyz(i - 1, 1))
+        Zi = CDbl(xyz(i - 1, 2))
+
+        axisData(0) = Xi
+        axisData(1) = Yi
+        axisData(2) = Zi
+        axisData(3) = dirSketcheH(0)
+        axisData(4) = dirSketcheH(1)
+        axisData(5) = dirSketcheH(2)
+        axisData(6) = dirSketcheV(0)
+        axisData(7) = dirSketcheV(1)
+        axisData(8) = dirSketcheV(2)
+
+        Set sketch = sketches.Add(planeNormal)
+        sketch.SetAbsoluteAxisData axisData
+
+        Set f2d = sketch.OpenEdition()
+
+        angleRad = CDbl(angles(i - 1, 0))
+        c = Cos(angleRad)
+        s = Sin(angleRad)
+
+        uv = section_uv_all(i - 1)
+
+        Dim u00 As Double, v00 As Double
+
+        u00 = CDbl(uv(LBound(uv, 1), 0))
+        v00 = CDbl(uv(LBound(uv, 1), 1))
+        ur0 =  c * u00 - s * v00
+        vr0 =  (s * u00 + c * v00)*V_coord_fix
+
+        For j = LBound(uv, 1) To UBound(uv, 1)
+            u0 = CDbl(uv(j, 0))
+            v0 = CDbl(uv(j, 1))
+
+            ur =  c * u0 - s * v0
+            vr =  (s * u0 + c * v0)*V_coord_fix
+
+            Set pt2d = f2d.CreatePoint(ur, vr)
+            Set poles(j) = pt2d
+
+        Next
+
+        Dim N
+        N = UBound(poles)
+
+        Dim arr0, arr1, arr2, arr3, arr4, arr5, arr6, arr7
+
+        arr0 = BuildPoleSegment(poles, N, section_point_idx0, section_point_idx1)
+        arr1 = BuildPoleSegment(poles, N, section_point_idx1, section_point_idx3)
+        arr3 = BuildPoleSegment(poles, N, section_point_idx3, section_point_idx4)
+        arr4 = BuildPoleSegment(poles, N, section_point_idx4, section_point_idx5)
+        arr5 = BuildPoleSegment(poles, N, section_point_idx5, section_point_idx7)
+        arr7 = BuildPoleSegment(poles, N, section_point_idx7, section_point_idx0)
+
+        Dim sketchSp0,sketchSp1,sketchSp2,sketchSp3,sketchSp4,sketchSp5,sketchSp6,sketchSp7
+        Set sketchSp0 = f2d.CreateSpline(arr0)
+        Set sketchSp1 = f2d.CreateSpline(arr1)
+        Set sketchSp3 = f2d.CreateSpline(arr3)
+        Set sketchSp4 = f2d.CreateSpline(arr4)
+        Set sketchSp5 = f2d.CreateSpline(arr5)
+        Set sketchSp7 = f2d.CreateSpline(arr7)
+
+        sketch.CloseEdition
+
+        loft.AddSectionToLoft part.CreateReferenceFromObject(sketch), 1, Nothing
+    Next
+
+    part.UpdateObject loft
+
+    sel.Clear
+    sel.Add loft
+    sel.Copy
+    sel.PasteSpecial "CATPrtResultWithOutLink"
+
+    Set frozenLoft = yarnSurfaceHB.HybridShapes.Item(yarnSurfaceHB.HybridShapes.Count)
+    frozenLoft.Name = loftName & "_frozen"
+    part.UpdateObject frozenLoft
+
+    sel.Clear
+    sel.Add loft
+    sel.Delete
+
+End Sub
+
+Function ReadSectionCSV(section_csv_path, point_num)
+    Dim fso, file, line, parts
+    Dim tmpUV, rowCount
+
+    rowCount = 0
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    If Not fso.FileExists(section_csv_path) Then
+        MsgBox "File does not exist: " & section_csv_path
+        Exit Function
+    End If
+
+    Set file = fso.OpenTextFile(section_csv_path, 1, False)
+
+    ReDim tmpUV(1, point_num - 1)
+
+    Do Until file.AtEndOfStream
+        line = Trim(file.ReadLine)
+        If Len(line) > 0 Then
+            parts = Split(line, ",")
+            If UBound(parts) >= 1 Then
+                tmpUV(0, rowCount) = CDbl(parts(0))
+                tmpUV(1, rowCount) = CDbl(parts(1))
+                rowCount = rowCount + 1
+                If rowCount >= point_num Then Exit Do
+            End If
+        End If
+    Loop
+
+    file.Close
+    Set fso = Nothing
+
+    If rowCount = 0 Then Exit Function
+
+    If rowCount < point_num Then
+        ReDim Preserve tmpUV(1, rowCount - 1)
+    End If
+
+    Dim uvT, i
+    ReDim uvT(rowCount - 1, 1)
+    For i = 0 To rowCount - 1
+        uvT(i, 0) = tmpUV(0, i)
+        uvT(i, 1) = tmpUV(1, i)
+    Next
+
+    ReadSectionCSV = uvT
+End Function
+
+Function BuildPoleSegment(poles, lastIdx, iStart, iEnd)
+    Dim k, i, cnt, N
+    N = lastIdx + 1
+
+    cnt = 1
+    i = iStart
+    Do While i <> iEnd
+        i = (i + 1) Mod N
+        cnt = cnt + 1
+        If cnt > N + 2 Then Exit Do
+    Loop
+
+    Dim arr()
+    ReDim arr(cnt - 1)
+
+    i = iStart
+    For k = 0 To cnt - 1
+        Set arr(k) = poles(i)
+        If i = iEnd Then Exit For
+        i = (i + 1) Mod N
+    Next
+
+    BuildPoleSegment = arr
+End Function
+
+Sub UserCrossProduct(v1, v2, vOut)
+    vOut(0) = v1(1)*v2(2) - v1(2)*v2(1)
+    vOut(1) = v1(2)*v2(0) - v1(0)*v2(2)
+    vOut(2) = v1(0)*v2(1) - v1(1)*v2(0)
+End Sub
+
+sub sketch_uv2XYZ(u,v, ax, X, Y, Z)
+X = ax(0) + u*ax(3) + v*ax(6)
+Y = ax(1) + u*ax(4) + v*ax(7)
+Z = ax(2) + u*ax(5) + v*ax(8)
+
+end sub
